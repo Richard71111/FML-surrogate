@@ -1,0 +1,420 @@
+% Compile with: latexmk -pdf numerical_method.tex
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=blue!55!black,
+ urlcolor=blue!55!black]{hyperref}
+
+\newcommand{\Icl}{I_{\mathrm{cleft}}}
+\newcommand{\Iion}{I_{\mathrm{ion}}}
+\newcommand{\Ib}{I_{b}}
+\newcommand{\Cax}{C_{\mathrm{ax}}}
+\newcommand{\Cb}{C_{b}}
+\newcommand{\gmyo}{g_{\mathrm{myo}}}
+\newcommand{\FML}{\mathcal{F}_{\mathrm{FML}}}
+\newcommand{\Rn}{\mathbb{R}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\dtF}{\Delta t_{\mathrm{FML}}}
+\newcommand{\dtS}{\Delta t_{\mathrm{sim}}}
+
+\setlist{itemsep=1pt,topsep=3pt}
+
+\title{\bfseries Numerical Method on the FML-Coupled ORd11 Cable}
+\author{Documentation of \texttt{Numerical\_simulation/}}
+\date{\today}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+%======================================================================
+\section{Setting and notation}
+%======================================================================
+
+A chain of $N$ myocytes, cells $i=0,\dots,N-1$, junctions $j=0,\dots,N-2$
+(junction $j$ separates cells $j$ and $j+1$). Let $V\in\Rn^{N}$ be the axial
+transmembrane potentials and $G$ the $40N$ non-voltage ORd11 states. Each junction carries two independently predicted cleft
+currents,
+\begin{equation}
+\Icl^{(j)}=\bigl(\Icl^{L,j},\,\Icl^{R,j}\bigr),
+\qquad
+q:=\bigl(\Icl^{(0)},\dots,\Icl^{(N-2)}\bigr)\in\Rn^{2(N-1)}.
+\end{equation}
+They are \emph{not} constrained to be equal and opposite; each side is delivered
+only to the cell that owns it, through the owner-side incidence matrix
+$\Sigma\in\Rn^{N\times 2(N-1)}$ with $\Sigma_{j,2j}=\Sigma_{j+1,2j+1}=1$ and all
+other entries zero. The reduced cable equation, with all gap-junctional and
+ephaptic coupling absorbed into $q$, is
+\begin{equation}
+\Cax\,\dot V = -\bigl[\,\Iion(V,G,t)+\Sigma q+\Ib(V,V_b)\,\bigr],
+\qquad \dot G=g(V,G),
+\qquad \Cax=2\pi rLC_m.
+\label{eq:cable}
+\end{equation}
+The physics being surrogated is the resolved resistor--capacitor network of the
+intercalated-disc cleft, whose junction ports the trained model reproduces
+directly.
+
+\paragraph{The surrogate and its clock.}
+$\FML$ is a small network applied batched over junctions (no cross-junction
+mixing), following memory-augmented flow-map learning, whose memory window plays the role of the
+Mori--Zwanzig closure for the eliminated cleft degrees of freedom. The
+\emph{source} variable driving each junction is the pair of adjacent cell
+voltages: writing $\Pi:\Rn^N\to\Rn^{(N-1)\times2}$ for the linear
+adjacent-voltage extraction $(\Pi V)^{(j)}=(V_j,V_{j+1})$, the source at time
+$t_k$ is $\phi_k=\Pi V(t_k)$. The trained contract is
+\begin{equation}
+q_{k+1}=\FML\bigl(\underbrace{q_{k-M{:}k},\;\phi_{k-M{:}k}}_{\textstyle
+\mathcal H_k\ \text{(frozen history)}},\;
+\underbrace{\phi_{k+1}}_{\text{target-time source}}\bigr)
+\;=:\;\FML\bigl(\mathcal H_k,\;\phi_{k+1}\bigr).
+\label{eq:fml}
+\end{equation}
+The two-argument form on the right is only an abbreviation for the left-hand
+side; it is the sole form used below. Two facts govern everything that follows.
+\textbf{(i)} The history is sampled on the training step $\dtF$; FML learns the
+flow map for \emph{one} specific increment, so committing on any other spacing
+is off-distribution. \textbf{(ii)} The network consumes $\phi_{k+1}$, the source
+at the \emph{end} of the interval it predicts --- so the surrogate is implicit
+by construction.
+
+%======================================================================
+\section{Two-scale discretization}
+%======================================================================
+
+Let $t_k=k\,\dtF$ be the macro (FML) grid. Inside $[t_k,t_{k+1}]$ the electrical
+equations use a finer grid
+\begin{equation}
+t_k=\tau_0<\dots<\tau_R=t_{k+1},
+\qquad
+\Delta t_r=\tau_r-\tau_{r-1},
+\qquad
+\Delta t_r\in\{\dtS^{\mathrm{fine}},\dtS^{\mathrm{coarse}}\},
+\end{equation}
+with $\dtS^{\mathrm{fine}}$ used during the first $W$ ms of each beat (the
+sodium upstroke) and $\dtS^{\mathrm{coarse}}:=\dtF$ elsewhere; step targets are
+clipped so no micro-step straddles a macro or window boundary. This is the
+standard multirate / heterogeneous-multiscale structure, with the unusual feature that the macro step is fixed by
+\emph{training} rather than chosen for accuracy. Refining $\dtS$ adds no samples
+to the FML history.
+
+\subsection{Linear reconstruction of the cleft currents $\Icl$}
+
+Given the accepted left endpoint $q_k$ and a candidate right endpoint
+$q_{k+1}$, the cleft currents at any $\tau\in(t_k,t_{k+1}]$ are
+\begin{equation}
+\boxed{\;
+q(\tau)=(1-\alpha)\,q_k+\alpha\,q_{k+1},
+\qquad
+\alpha=\frac{\tau-t_k}{\dtF}\;}
+\label{eq:recon}
+\end{equation}
+evaluated at the micro-step \emph{target} time $\tau_r$ (i.e.\ the scheme uses
+$q^{n+1}$, not $q^n$). This is \emph{interpolation between two macro endpoints},
+not extrapolation from past samples: $q_{k+1}$ is an unknown to be solved for,
+not a value predicted from $q_{k-1},q_k$. First-order interpolation of coupling
+variables, rather than a zero-order hold or extrapolation, is the standard
+co-simulation remedy for coupling-variable discontinuities.
+
+\subsection{The micro-step}
+
+On $[\tau_{r-1},\tau_r]$, with $\Delta t=\Delta t_r$ and $V^n=V(\tau_{r-1})$,
+\begin{equation}
+\frac{\Cax}{\Delta t}\bigl(V^{n+1}-V^{n}\bigr)
++\Iion^{\,n}+\Sigma q^{\,n+1}+\Ib^{\,n+1}=0.
+\label{eq:micro}
+\end{equation}
+$\Iion$ is explicit (Forward Euler) at level $n$; $q$ is prescribed by
+\eqref{eq:recon} at level $n+1$; the linear terminal load $\Ib$ is implicit.
+This is an IMEX split on top of the usual cardiac operator
+splitting: ORd11 concentrations advance by Forward Euler, and
+every gate $\dot x=(x_\infty(V)-x)/\tau_x(V)$ advances by Rush--Larsen,
+\begin{equation}
+x^{n+1}=x_\infty(V^n)-\bigl(x_\infty(V^n)-x^{n}\bigr)e^{-\Delta t/\tau_x(V^n)},
+\label{eq:rl}
+\end{equation}
+the exact solution of the gate equation with coefficients frozen over the step.
+Because $q^{n+1}$ is prescribed, \eqref{eq:micro} is explicit for the interior
+cells,
+\begin{equation}
+V^{n+1}_{\mathrm{pred}}=V^{n}-\frac{\Delta t}{\Cax}\bigl(\Iion^{\,n}+\Sigma q^{\,n+1}\bigr).
+\label{eq:predictor}
+\end{equation}
+
+\paragraph{Terminal boundary.}
+Each end is an active ORd11 disc patch at potential $V_b$, coupled through the
+half-cell conductance $\gmyo=\bigl[\rho_{\mathrm{myo}}(L/2)/\pi r^2\bigr]^{-1}$
+and advanced implicitly:
+\begin{equation}
+V_b^{n+1}=
+\frac{(\Cb/\Delta t)V_b^{n}+\gmyo V_e^{n+1}-I_{\mathrm{ion},b}^{\,n}}
+ {\Cb/\Delta t+\gmyo},
+\qquad
+\Ib=\gmyo\bigl(V_e^{n+1}-V_b^{n+1}\bigr),
+\label{eq:vb}
+\end{equation}
+with $V_e^{n+1}=(V^{n+1}_0,V^{n+1}_{N-1})$. Since $V_b^{n+1}$ is affine in
+$V_e^{n+1}$, so is $\Ib$, with
+$\partial\Ib/\partial V_e^{n+1}=\gmyo(\Cb/\Delta t)/(\Cb/\Delta t+\gmyo)=:\beta$.
+The code corrects \eqref{eq:predictor} by dividing the residual of
+\eqref{eq:micro} by $1+\tfrac{\Delta t}{\Cax}\beta$ at the two endpoint cells.
+Because the boundary system is linear this single correction is \emph{exact} ---
+a Schur-complement elimination of the two boundary unknowns, not an iteration.
+
+%======================================================================
+\section{Where the coupling condition comes from}
+\label{sec:residual}
+%======================================================================
+
+This section derives Eq.~\eqref{eq:residual} below. It is the mathematical
+content of the method, and it is \textbf{not} an ansatz or a guess: it is forced,
+with no freedom, by combining the discretization of \S2 with the surrogate
+contract \eqref{eq:fml}.
+
+\paragraph{Step 1: what is unknown.}
+At the start of macro step $k$ we know the accepted state
+$S_k=(V_k,V_b^k,G^k,G_b^k)$, the accepted left endpoint current $q_k$, and the
+frozen history $\mathcal H_k$. The unknowns are the pair $(V_{k+1},q_{k+1})$.
+
+\paragraph{Step 2: the first relation --- the dynamics.}
+Suppose we \emph{prescribe} an arbitrary right endpoint value
+$p\in\Rn^{2(N-1)}$. Then \eqref{eq:recon} determines $q(\tau)$ on the whole
+interval, and every micro-step \eqref{eq:micro}--\eqref{eq:vb} becomes an
+explicit formula. Composing them defines a concrete, computable map
+\begin{equation}
+\Psi_k(p)\;:=\;\pi_V\circ\mathcal M_R\bigl(\cdot\,;q(\tau_R)\bigr)\circ\cdots\circ
+\mathcal M_1\bigl(\cdot\,;q(\tau_1)\bigr)\,(S_k)\;\in\Rn^N,
+\qquad q(\tau_r)=(1-\alpha_r)q_k+\alpha_r p,
+\label{eq:psi}
+\end{equation}
+where $\mathcal M_r$ is the one-step map of \S2.2 and $\pi_V$ projects onto the
+voltage block. Evaluating $\Psi_k$ is exactly one pass of the inner loop. The
+first relation the true solution must satisfy is therefore
+\begin{equation}
+V_{k+1}=\Psi_k(q_{k+1}).
+\tag{A}
+\label{eq:A}
+\end{equation}
+
+\paragraph{Step 3: the second relation --- the surrogate.}
+This relation is nothing but the trained contract \eqref{eq:fml} itself,
+\begin{equation}
+q_{k+1}=\FML\bigl(\mathcal H_k,\;\phi_{k+1}\bigr),
+\tag{B}
+\label{eq:B}
+\end{equation}
+with $\mathcal H_k$ the history frozen at $t_k$. No new symbol is introduced:
+\eqref{eq:B} adds to \eqref{eq:fml} only the observation that its target-time
+source is the \emph{unknown} endpoint voltage of the very interval being
+integrated, $\phi_{k+1}=\Pi V_{k+1}$.
+
+\paragraph{Step 4: the algebraic loop.}
+\eqref{eq:A}--\eqref{eq:B} is a square nonlinear system of $N+2(N-1)$ equations
+in $N+2(N-1)$ unknowns, and neither equation can be evaluated first: $\Psi_k$
+needs $q_{k+1}$, and $\FML$ needs $V_{k+1}$. This is a genuine \emph{algebraic
+loop}, and it is worth being precise about its origin:
+
+\begin{quote}
+The loop is not created by the discretization. It is inherited from fact (ii) of
+\S1 --- the network consumes $\phi_{k+1}$. Had the surrogate been trained on the
+current-time source $\phi_k$ only, \eqref{eq:B} would read
+$q_{k+1}=\FML(\mathcal H_k,\phi_k)$ with $\phi_k=\Pi V_k$ already known, the
+loop would break, and the whole method
+would be explicit. The macro solve is precisely the price of the target-time
+contract, and it must be paid because that is the contract the network was
+trained under.
+\end{quote}
+
+\paragraph{Step 5: elimination.}
+Substituting \eqref{eq:B} into \eqref{eq:A} eliminates $q_{k+1}$ and leaves an
+$N$-dimensional problem in $V_{k+1}$ alone. Defining the \emph{macro propagator}
+\begin{equation}
+\Phi_k(\widehat V)\;:=\;\Psi_k\Bigl(\FML\bigl(\mathcal H_k,\;\Pi\widehat V\bigr)\Bigr),
+\label{eq:Phi}
+\end{equation}
+--- read from right to left: take a candidate endpoint voltage $\widehat V$,
+form the target-time source $\Pi\widehat V$, obtain the endpoint cleft currents
+from \eqref{eq:fml}, and integrate the interval with \eqref{eq:psi} --- the
+coupled system \eqref{eq:A}--\eqref{eq:B} is \emph{equivalent} to the fixed
+point $\widehat V=\Phi_k(\widehat V)$, i.e.\ to the root-finding problem
+\begin{equation}
+\boxed{\;
+R_k(\widehat V)\;:=\;\widehat V-\Phi_k(\widehat V)\;=\;0,
+\qquad R_k:\Rn^N\to\Rn^N,
+\;}
+\label{eq:residual}
+\end{equation}
+whose root is the accepted endpoint voltage $V_{k+1}$; the accepted endpoint
+current $q_{k+1}$ is then recovered from \eqref{eq:B}.
+
+\paragraph{Why eliminate toward $V$ rather than toward $q$.}
+Both eliminations are legitimate; the $V$-form is chosen because (i) it is the
+smaller system, $N<2(N-1)$ for $N>2$; (ii) the residual then carries units of mV,
+so a tolerance of $10^{-6}$~mV is physically interpretable, whereas a
+current-space tolerance would have to be rescaled per operating point; and (iii)
+evaluating $\Phi_k$ already produces everything needed to commit the step
+(endpoint state, boundary state, full micro trajectory).
+
+\paragraph{Interpretation of the residual.}
+$\|R_k\|$ is not an abstract convergence monitor. It is exactly the
+\emph{inconsistency} between the cleft current a scheme feeds into the interval
+and the cleft current the surrogate would report for the voltage that interval
+actually produced. A current-hold scheme ($p=q_k$) or an extrapolation scheme
+commits some $q_{k+1}$ and then obtains a $V_{k+1}$ for which
+$\FML(\mathcal H_k,\Pi V_{k+1})\ne q_{k+1}$; the size of that mismatch is
+$\|R_k\|$ evaluated
+at their answer. Driving $R_k$ to zero is what makes the committed history
+sample self-consistent, which matters here more than usual: an inconsistent
+sample is not merely a local error, it enters $\mathcal H_{k+1}$ and corrupts
+every subsequent surrogate evaluation.
+
+\paragraph{Step 6: solvability and why it is cheap.}
+Differentiating \eqref{eq:Phi} by the chain rule,
+\begin{equation}
+\Phi_k'(\widehat V)
+=\underbrace{\frac{\partial\Psi_k}{\partial p}}_{\text{dynamics}}
+\cdot
+\underbrace{\frac{\partial\FML}{\partial\phi}}_{\text{network}}
+\cdot\;\Pi,
+\label{eq:chain}
+\end{equation}
+and \S4.1 shows $\partial\Psi_k/\partial p=-\tfrac{w_k}{\Cax}\Sigma$ with
+$w_k=O(\dtF)$. Hence $\|\Phi_k'\|=O(\dtF)$: for $\dtF$ small enough $\Phi_k$ is a
+contraction, so by the Banach fixed-point theorem \eqref{eq:residual} has a
+unique root in a neighbourhood of the current-hold guess, and even plain
+fixed-point iteration converges. This is why the observed cost of the implicit
+coupling is small. Newton is used anyway because $\partial\FML/\partial\phi$ is
+largest during the sodium upstroke, exactly where the contraction constant
+degrades.
+
+%======================================================================
+\section{Solving the coupling condition}
+%======================================================================
+
+\subsection{The approximate macro Jacobian}
+\label{sec:jac}
+
+\paragraph{Derivation.} Sum \eqref{eq:micro} over the interval and keep only the
+dependence on the right endpoint value $p$:
+\begin{equation}
+\Psi_k(p)=V_k-\frac{1}{\Cax}\sum_{r=1}^{R}\Delta t_r
+\Bigl[\Iion^{\,r-1}+\Sigma\bigl((1-\alpha_r)q_k+\alpha_r p\bigr)+\Ib^{\,r}\Bigr],
+\end{equation}
+so that, holding the $\Iion$ and $\Ib$ trajectories fixed,
+\begin{equation}
+\frac{\partial\Psi_k}{\partial p}=-\frac{w_k}{\Cax}\,\Sigma,
+\qquad
+w_k:=\sum_{r=1}^{R}\Delta t_r\,\alpha_r,
+\qquad
+\alpha_r=\frac{\tau_r-t_k}{\dtF}.
+\label{eq:weight}
+\end{equation}
+The weight $w_k$ has units of time. On a uniform micro-grid it evaluates exactly
+to
+\begin{equation}
+w_k=\frac{\Delta t^2}{\dtF}\sum_{r=1}^{R}r=\frac{\dtF+\Delta t}{2}
+\;\xrightarrow[\ \Delta t\to0\ ]{}\;\frac{\dtF}{2},
+\end{equation}
+the discrete analogue of $\int_{t_k}^{t_{k+1}}\alpha(\tau)\,\dd\tau=\dtF/2$. The
+code accumulates $\sum_r\Delta t_r\alpha_r$ literally over the retained
+micro-records, so it is exact for the actual, possibly non-uniform grid rather
+than using either closed form.
+
+Let $A:=\partial q_{k+1}/\partial\widehat V\in\Rn^{2(N-1)\times N}$ be the
+scatter of the block-diagonal network Jacobian into cable coordinates,
+$A_{2j+s,\,j}=J^{(j)}_{s,0}$ and $A_{2j+s,\,j+1}=J^{(j)}_{s,1}$, where
+$J^{(j)}_{s,m}=\partial\Icl^{s,j}/\partial\phi^{(j)}_m$. The $2\times2$ blocks
+$J^{(j)}$ are computed by \emph{forward-mode} propagation of two tangent columns
+through the Linear/BatchNorm/ReLU stack in the same batched forward pass
+ --- exact, and cheaper than reverse mode here because each
+junction has only two independent inputs. Substituting \eqref{eq:weight} and
+$A=(\partial\FML/\partial\phi)\Pi$ into \eqref{eq:chain} gives
+$\Phi_k'=-\tfrac{w_k}{\Cax}\Sigma A$, hence
+\begin{equation}
+\boxed{\;
+\mathcal J_k \;=\; I-\Phi_k' \;=\; I_N+\frac{w_k}{\Cax}\,\Sigma A,
+\;}
+\qquad \delta=-\mathcal J_k^{-1}R_k.
+\label{eq:macrojac}
+\end{equation}
+$\Sigma A$ is tridiagonal by construction, so $\mathcal J_k$ is a small
+structured $N\times N$ matrix, solved directly.
+
+\paragraph{Status of \eqref{eq:macrojac}: derived, and deliberately inexact.}
+Equation \eqref{eq:macrojac} is derived here from the structure of the scheme; it
+is not taken from any paper, and we claim no such provenance. It is
+\emph{approximate} in one specific, identified way: the step from
+\eqref{eq:weight} held the $\Iion$ and $\Ib$ trajectories fixed, so
+\eqref{eq:macrojac} omits the sensitivity of the nonlinear ionic path to the
+perturbed voltage path. That term is expensive and, during the upstroke, badly
+conditioned. Dropping it is legitimate because the resulting $\delta$ is used
+only as a \emph{search direction}: every trial is validated by a full
+re-integration (\S4.2). This is the classical inexact / approximate-Jacobian
+Newton setting --- with a
+sufficient-decrease line search, an inexact direction still converges globally,
+and the \emph{accepted} solution satisfies \eqref{eq:residual} to tolerance no
+matter how crude $\mathcal J_k$ was. Only the iteration count depends on the
+approximation quality. Solving a coupling condition of the form
+\eqref{eq:residual} by Newton on the coupling variable, rather than by plain
+Gauss--Seidel iteration, is standard implicit co-simulation practice.
+
+\subsection{Globalization and rollback}
+
+Initialize with the current-hold guess $\widehat V^{(0)}=\Psi_k(q_k)$ --- the
+explicit (zero-order-hold) coupling step, used purely as a predictor. Then
+iterate:
+
+\begin{enumerate}[leftmargin=1.6em]
+\item Evaluate $q_{k+1}=\FML(\mathcal H_k,\Pi\widehat V)$ and $J$; integrate the interval;
+ $R_k=\widehat V-\Phi_k(\widehat V)$. Stop if $\|R_k\|_\infty<\texttt{tol}$.
+\item $\delta=-\mathcal J_k^{-1}R_k$. Backtrack $\sigma\in\{1,\tfrac12,\dots\}$,
+ \emph{fully re-integrating} the interval at $\widehat V+\sigma\delta$ and
+ accepting the first $\sigma$ that strictly reduces $\|R_k\|$ --- Armijo
+ backtracking on the merit function $\tfrac12\|R_k\|^2$ with the
+ sufficient-decrease constant taken to zero.
+\item If no $\sigma$ succeeds, take a damped fixed-point step
+ $\widehat V\leftarrow\widehat V-\lambda R_k$, halving
+ $\lambda$ toward $\lambda_{\min}$ whenever
+ $\|R_k\|_\infty>0.95\|R_k^{\mathrm{prev}}\|_\infty$.
+\end{enumerate}
+
+Every trial --- predictor, outer iteration, backtrack --- first restores the
+ORd11 and boundary states saved at $t_k$ and re-integrates the entire macro
+interval, so no trial leaves a footprint. This is co-simulation \emph{rollback}; here the interval is short enough that recomputation beats
+storing the micro trajectory. After convergence the surrogate is evaluated
+\emph{once more} at the accepted endpoint, so that the committed
+$(q_{k+1},\phi_{k+1})$ pair corresponds to the accepted state rather than to the
+last iterate, and exactly one sample is pushed into $\mathcal H_{k+1}$. The run
+asserts that the vector of commit times equals $(\dtF,2\dtF,\dots)$ to
+$10^{-9}$~ms: an off-clock commit would silently place the surrogate
+off-distribution for every subsequent step.
+
+%======================================================================
+\section{Order of the scheme}
+%======================================================================
+
+The voltage/ionic update is Forward Euler with Rush--Larsen gates: local error
+$O(\dtS^2)$, global $O(\dtS)$. The
+reconstruction \eqref{eq:recon} is second-order accurate in $\dtF$ \emph{as an
+interpolant}, but it is composed with a first-order base integrator and so does
+not raise the global order; its benefit is consistency and stability of the
+coupling, not order. The boundary elimination is exact.
+\textbf{The method is therefore globally first order}, and the name
+\texttt{macro\_endpoint\_linear} describes the cleft-current reconstruction
+only. Note also that refining $\dtS$ improves the ORd11 integration but leaves
+both the piecewise-linear $q(\tau)$ and the surrogate error untouched: the error
+floor is set by $\dtF$ and by the trained model, not by $\dtS$.
+
+Finally, the scheme deliberately does not impose $\Icl^{L,j}=-\Icl^{R,j}$. Each
+side is delivered raw through $\Sigma$; any imbalance is a property of the
+trained surrogate and is reported as a diagnostic rather than corrected, so the
+production path always passes both network outputs through unchanged.
+
+%======================================================================
+
+\end{document}

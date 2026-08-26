@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------
+# This repository tracks CODE only.  The working tree also holds
+# ~369 GB of generated data, checkpoints and run output; all of it
+# is reproducible from the code plus the raw FEM dataset, so none
+# of it belongs in git.
+# ---------------------------------------------------------------
+
+# Generated training data and checkpoints
+fml/data/
+fml/model/
+fml/eval/
+fml/logs/
+fml/QUARANTINE_trained_on_unstable_data/
+
+# Simulation output and logs
+Numerical_simulation/output/
+Numerical_simulation/logs/
+Numerical_simulation/bcl_sweeps/
+Numerical_simulation/Data/
+
+# Slurm job logs written next to the scripts
+**/logs/
+*.out
+*.err
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Binary / heavy artefacts, wherever they appear
+*.pth
+*.npz
+*.mat
+*.png
+*.pdf
+*.aux
