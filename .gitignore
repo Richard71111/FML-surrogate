@@ -36,3 +36,10 @@ __pycache__/
 *.png
 *.pdf
 *.aux
+
+# Not part of the published code
+error_analysis/
+ACCESS_project_abstract/
+
+# macOS
+.DS_Store
